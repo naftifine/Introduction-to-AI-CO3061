@@ -30,13 +30,11 @@ class Minesweeper:
         
         game_menu.add_command(label="New Game", command=self.reset_game)
         game_menu.add_separator()
-        game_menu.add_command(label="Easy (5x5, 5 mines)", 
-                              command=lambda: self.change_difficulty(5, 5, 5))
-        game_menu.add_command(label="Medium (9x9, 10 mines)", 
+        game_menu.add_command(label="Easy (9x9, 10 mines)", 
                               command=lambda: self.change_difficulty(9, 9, 10))
-        game_menu.add_command(label="Hard (16x16, 40 mines)", 
+        game_menu.add_command(label="Medium (16x16, 40 mines)", 
                               command=lambda: self.change_difficulty(16, 16, 40))
-        game_menu.add_command(label="Expert (16x30, 99 mines)", 
+        game_menu.add_command(label="Hard (30x16, 99 mines)", 
                               command=lambda: self.change_difficulty(16, 30, 99))
         game_menu.add_separator()
         game_menu.add_command(label="Exit", command=self.root.quit)
@@ -87,12 +85,12 @@ class Minesweeper:
                 self.board[r][c] = count
     
     def create_buttons(self):
-        for widget in self.root.winfo_children():
-            if isinstance(widget, tk.Frame):
-                widget.destroy()
+        # Only destroy the game frame, not all frames (preserve AI controls)
+        if hasattr(self, 'frame') and self.frame:
+            self.frame.destroy()
         
         self.frame = tk.Frame(self.root)
-        self.frame.pack(padx=10, pady=10)
+        self.frame.pack(side=tk.BOTTOM, padx=10, pady=10)
         
         btn_size = 3 if self.cols <= 9 else 2
         
@@ -129,14 +127,14 @@ class Minesweeper:
             self.game_over = True
             self.reveal_all_mines()
             self.buttons[(row, col)].config(bg='red')
-            messagebox.showinfo("Game Over", "💥 BOOM! You hit a mine!")
+            messagebox.showinfo("Game Over", "BOOM! You hit a mine!")
             return
         
         self.dfs_reveal(row, col)
         
         if self.check_win():
             self.game_over = True
-            messagebox.showinfo("Congratulations!", "🎉 You won! All mines cleared!")
+            messagebox.showinfo("Congratulations!", "You won! All mines cleared!")
     
     def chord_reveal(self, row, col):
         value = self.board[row][col]
@@ -163,14 +161,14 @@ class Minesweeper:
                     self.game_over = True
                     self.reveal_all_mines()
                     self.buttons[(nr, nc)].config(bg='red')
-                    messagebox.showinfo("Game Over", "💥 BOOM! You hit a mine!")
+                    messagebox.showinfo("Game Over", "BOOM! You hit a mine!")
                     return
                 else:
                     self.dfs_reveal(nr, nc)
             
             if self.check_win():
                 self.game_over = True
-                messagebox.showinfo("Congratulations!", "🎉 You won! All mines cleared!")
+                messagebox.showinfo("Congratulations!", "You won! All mines cleared!")
     
 
     # DFS to reveal all connected zero-value cells and their neighbors
@@ -261,6 +259,20 @@ def main():
     root = tk.Tk()
     root.resizable(False, False)
     game = Minesweeper(root, rows=9, cols=9, mines=10)
+    
+    # Import and setup AI controls
+    from minesweeper_ai import create_ai_controls
+    ai, control_frame = create_ai_controls(game)
+    
+    # Store reference to recreate AI on reset
+    original_reset = game.reset_game
+    def new_reset():
+        original_reset()
+        nonlocal ai
+        from minesweeper_ai import MinesweeperAI
+        ai = MinesweeperAI(game)
+    game.reset_game = new_reset
+    
     root.mainloop()
 
 
