@@ -624,7 +624,7 @@ def create_ai_controls(game):
         elif action == 'guess':
             r, c = data
             game.left_click(r, c)
-            status_label.config(text=f"Guessed ({r}, {c}) ⚠️")
+            status_label.config(text=f"Guessed ({r}, {c})")
     
     def on_auto():
         def update_status(action, data, solved):
@@ -635,7 +635,7 @@ def create_ai_controls(game):
             elif action == 'reveal':
                 status_label.config(text=f"Revealed {data}")
             elif action == 'guess':
-                status_label.config(text=f"Guessed {data} ⚠️")
+                status_label.config(text=f"Guessed {data}")
         
         result = ai.auto_solve(delay_ms=50, callback=update_status)
         if result:
