@@ -110,8 +110,7 @@ class MinesweeperAI:
                 if eff2 != 2 or len(set2) < 2:
                     continue
                 
-                overlap = set1 & set2
-                if len(overlap) >= 2:
+                if set1 <= set2:
                     diff = set2 - set1
                     if len(diff) == 1:
                         mines_found.update(diff)
@@ -203,21 +202,19 @@ class MinesweeperAI:
         
         numbered_cells = self.get_revealed_numbered_cells()
         
-        for r1, c1 in numbered_cells:
+        for i, (r1, c1) in enumerate(numbered_cells):
             set1 = set(self.get_unrevealed_neighbors(r1, c1))
             eff1 = self.effective_count(r1, c1)
             
-            if len(set1) == 0 or eff1 <= 0:
+            if not set1 or eff1 < 0:
                 continue
             
-            for r2, c2 in numbered_cells:
-                if (r1, c1) == (r2, c2):
-                    continue
-                
+            for j in range(i + 1, len(numbered_cells)):
+                r2, c2 = numbered_cells[j]
                 set2 = set(self.get_unrevealed_neighbors(r2, c2))
                 eff2 = self.effective_count(r2, c2)
                 
-                if len(set2) == 0:
+                if not set2 or eff2 < 0:
                     continue
                 
                 overlap = set1 & set2
@@ -226,15 +223,6 @@ class MinesweeperAI:
                 
                 only1 = set1 - set2
                 only2 = set2 - set1
-                
-                if eff2 <= len(overlap) and len(only2) > 0:
-                    remaining_for_1 = eff1 - eff2
-                    if remaining_for_1 >= 0 and remaining_for_1 <= len(only1):
-                        if eff2 == len(overlap):
-                            if remaining_for_1 == len(only1):
-                                mines_found.update(only1)
-                            elif remaining_for_1 == 0:
-                                safe_found.update(only1)
                 
                 min_in_overlap = max(0, eff1 - len(only1), eff2 - len(only2))
                 max_in_overlap = min(len(overlap), eff1, eff2)
@@ -317,13 +305,13 @@ class MinesweeperAI:
         return mines_found, safe_found
     
     def _check_assignment_possible(self, cells, constraints, target_cell, is_mine):
-        relevant_constraints = []
+        target_constraints = []
         for cell_tuple, count in constraints:
             if target_cell in cell_tuple:
-                relevant_constraints.append((cell_tuple, count))
+                target_constraints.append((cell_tuple, count))
         
         cells_to_try = set()
-        for cell_tuple, _ in relevant_constraints:
+        for cell_tuple, _ in target_constraints:
             cells_to_try.update(cell_tuple)
         cells_to_try.discard(target_cell)
         cells_list = list(cells_to_try)
@@ -331,18 +319,35 @@ class MinesweeperAI:
         if len(cells_list) > 15:
             return True
         
+        all_relevant_constraints = []
+        involved = cells_to_try | {target_cell}
+        for cell_tuple, count in constraints:
+            if set(cell_tuple) & involved:
+                all_relevant_constraints.append((cell_tuple, count))
+        
         for num_mines in range(len(cells_list) + 1):
             for mine_combo in combinations(cells_list, num_mines):
                 mine_set = set(mine_combo)
                 if is_mine:
                     mine_set.add(target_cell)
                 
+                assigned = cells_to_try | {target_cell}
                 valid = True
-                for cell_tuple, count in relevant_constraints:
+                for cell_tuple, count in all_relevant_constraints:
                     mines_in_constraint = sum(1 for c in cell_tuple if c in mine_set)
-                    if mines_in_constraint != count:
-                        valid = False
-                        break
+                    unassigned_in_constraint = [c for c in cell_tuple if c not in assigned]
+                    
+                    if not unassigned_in_constraint:
+                        if mines_in_constraint != count:
+                            valid = False
+                            break
+                    else:
+                        if mines_in_constraint > count:
+                            valid = False
+                            break
+                        if mines_in_constraint + len(unassigned_in_constraint) < count:
+                            valid = False
+                            break
                 
                 if valid:
                     return True
@@ -352,8 +357,8 @@ class MinesweeperAI:
     # ==================== PATTERN 7: LAST TURN ====================
     def pattern_last_turn(self):
         """
-        Logic: remaining_mines == unrevealed → all mines
-               remaining_mines == 0 → all safe
+        Logic: remaining_mines == unrevealed - all mines
+               remaining_mines == 0 - all safe
         """
         mines_found = set()
         safe_found = set()
@@ -374,48 +379,110 @@ class MinesweeperAI:
         
         return mines_found, safe_found
     
+    # ==================== FRONTIER SPLITTING ====================
+    def _get_constraints(self):
+        return [(set(unr), self.effective_count(r, c))
+                for r, c in self.get_revealed_numbered_cells()
+                if (unr := self.get_unrevealed_neighbors(r, c))]
+
+    def _split_frontier(self, frontier, constraints):
+        adj = defaultdict(set)
+        for cell_set, _ in constraints:
+            cells = list(cell_set)
+            for i in range(len(cells)):
+                for j in range(i + 1, len(cells)):
+                    adj[cells[i]].add(cells[j])
+                    adj[cells[j]].add(cells[i])
+
+        frontier_set = set(frontier)
+        visited = set()
+        groups = []
+        
+        for start in frontier:
+            if start in visited:
+                continue
+            
+            component_cells = set()
+            stack = [start]
+            
+            while stack:
+                node = stack.pop()
+                if node in visited:
+                    continue
+                visited.add(node)
+                component_cells.add(node)
+                
+                for nb in adj[node]:
+                    if nb not in visited and nb in frontier_set:
+                        stack.append(nb)
+            
+            group_constraints = [
+                (cell_set, count)
+                for cell_set, count in constraints
+                if cell_set & component_cells
+            ]
+            groups.append((list(component_cells), group_constraints))
+            
+        return groups
+
     # ==================== BACKTRACKING ====================
-    def backtracking_solve(self, max_depth=25):
+    def backtracking_solve(self, max_group_size=22):
         mines_found = set()
         safe_found = set()
+        probs = {}
         
         frontier = list(self.get_frontier())
-        if not frontier or len(frontier) > max_depth:
-            return mines_found, safe_found
+        constraints = self._get_constraints()
         
-        constraints = []
-        for r, c in self.get_revealed_numbered_cells():
-            unrevealed = tuple(self.get_unrevealed_neighbors(r, c))
-            if unrevealed:
-                eff = self.effective_count(r, c)
-                constraints.append((set(unrevealed), eff))
+        if not frontier or not constraints:
+            return mines_found, safe_found, probs
+
+        remaining_mines = self.game.mines - sum(
+            1 for r in range(self.game.rows)
+            for c in range(self.game.cols)
+            if self.game.flagged[r][c]
+        )
+
+        groups = self._split_frontier(frontier, constraints)
         
-        if not constraints:
-            return mines_found, safe_found
-        
-        solutions = []
-        self._backtrack(frontier, 0, set(), constraints, solutions, max_solutions=1000)
-        
-        if not solutions:
-            return mines_found, safe_found
-        
-        for cell in frontier:
-            is_mine_count = sum(1 for sol in solutions if cell in sol)
+        for group_cells, group_constraints in groups:
+            if len(group_cells) > max_group_size:
+                continue
             
-            if is_mine_count == len(solutions):
-                mines_found.add(cell)
-            elif is_mine_count == 0:
-                safe_found.add(cell)
+            solutions = []
+            self._backtrack(
+                group_cells, 0, set(), group_constraints,
+                solutions, max_solutions=2000,
+                max_allowed_mines=remaining_mines
+            )
+            
+            if not solutions:
+                continue
+
+            for cell in group_cells:
+                mine_count = sum(1 for sol in solutions if cell in sol)
+                probs[cell] = mine_count / len(solutions)
+                
+                if mine_count == len(solutions):
+                    mines_found.add(cell)
+                elif mine_count == 0:
+                    safe_found.add(cell)
         
-        return mines_found, safe_found
+        return mines_found, safe_found, probs
     
-    def _backtrack(self, cells, idx, current_mines, constraints, solutions, max_solutions):
+    def _backtrack(self, cells, idx, current_mines, constraints,
+                   solutions, max_solutions, max_allowed_mines):
         if len(solutions) >= max_solutions:
             return
         
+        # Pruning
+        if len(current_mines) > max_allowed_mines:
+            return
+
+        assigned = set(cells[:idx])
         for cell_set, count in constraints:
             mines_in_set = len(cell_set & current_mines)
-            remaining_cells = cell_set - current_mines - set(cells[:idx])
+            remaining_cells = cell_set - current_mines - assigned
             
             if mines_in_set > count:
                 return
@@ -423,21 +490,21 @@ class MinesweeperAI:
                 return
         
         if idx == len(cells):
-            for cell_set, count in constraints:
-                if len(cell_set & current_mines) != count:
-                    return
-            solutions.append(frozenset(current_mines))
+            if all(len(cell_set & current_mines) == count
+                   for cell_set, count in constraints):
+                solutions.append(frozenset(current_mines))
             return
         
         cell = cells[idx]
-        self._backtrack(cells, idx + 1, current_mines, constraints, solutions, max_solutions)
-        new_mines = current_mines | {cell}
-        self._backtrack(cells, idx + 1, new_mines, constraints, solutions, max_solutions)
+        self._backtrack(cells, idx + 1, current_mines, constraints,
+                        solutions, max_solutions, max_allowed_mines)
+        self._backtrack(cells, idx + 1, current_mines | {cell}, constraints,
+                        solutions, max_solutions, max_allowed_mines)
     
     # ==================== MAIN SOLVER ====================
     def solve_step(self):
         """
-        Flow: Basic → 1-2-X → 1-1-X → Reduction → Advanced → Last Turn → CSP → Backtrack → Guess
+        Flow: Chord - Basic - 1-2-X - 1-1-X - Reduction - Advanced - Last Turn - CSP - Backtrack - Guess
         Returns: (action, (row, col)) or ('done', None)
         """
         if self.game.game_over:
@@ -447,10 +514,16 @@ class MinesweeperAI:
             r, c = self.game.rows // 2, self.game.cols // 2
             return ('reveal', (r, c))
         
+        for r, c in self.get_revealed_numbered_cells():
+            effective = self.effective_count(r, c)
+            if effective == 0 and self.get_unrevealed_neighbors(r, c):
+                return ('chord', (r, c))
+        
         self.known_mines.clear()
         self.known_safe.clear()
         self.chord_cells.clear()
         
+        # ========== Pattern-based strategies ==========
         # Pattern 1: Basic
         mines, safe, chords = self.pattern_basic()
         self.known_mines.update(mines)
@@ -475,7 +548,7 @@ class MinesweeperAI:
                 if mines or safe:
                     break
         
-        # Execute: flag → chord → reveal
+        # Execute: flag - chord - reveal
         for r, c in self.known_mines:
             if not self.game.flagged[r][c]:
                 return ('flag', (r, c))
@@ -488,8 +561,7 @@ class MinesweeperAI:
             if not self.game.revealed[r][c] and not self.game.flagged[r][c]:
                 return ('reveal', (r, c))
         
-        # Backtracking if patterns failed
-        mines, safe = self.backtracking_solve()
+        mines, safe, probs = self.backtracking_solve()
         
         for r, c in mines:
             if not self.game.flagged[r][c]:
@@ -499,60 +571,43 @@ class MinesweeperAI:
             if not self.game.revealed[r][c] and not self.game.flagged[r][c]:
                 return ('reveal', (r, c))
         
-        # Guess if nothing certain
-        return self._make_guess()
+        return self._smart_guess(probs)
     
-    def _make_guess(self):
-        """Guess cell with lowest mine probability"""
-        frontier = list(self.get_frontier())
-        unrevealed = self.get_all_unrevealed()
+    def _smart_guess(self, probs):
+        import random
         
+        unrevealed = self.get_all_unrevealed()
         if not unrevealed:
             return ('done', None)
         
-        # Calculate probability via backtracking
-        if frontier:
-            constraints = []
-            for r, c in self.get_revealed_numbered_cells():
-                unrevealed_neighbors = tuple(self.get_unrevealed_neighbors(r, c))
-                if unrevealed_neighbors:
-                    eff = self.effective_count(r, c)
-                    constraints.append((set(unrevealed_neighbors), eff))
-            
-            if len(frontier) <= 20:
-                solutions = []
-                self._backtrack(frontier, 0, set(), constraints, solutions, max_solutions=500)
-                
-                if solutions:
-                    min_prob = 1.0
-                    best_cell = None
-                    
-                    for cell in frontier:
-                        mine_count = sum(1 for sol in solutions if cell in sol)
-                        prob = mine_count / len(solutions)
-                        
-                        if prob < min_prob:
-                            min_prob = prob
-                            best_cell = cell
-                    
-                    if best_cell and min_prob < 0.5:
-                        return ('guess', best_cell)
-        
-        # Prefer non-frontier: corners > edges > any
+        frontier = self.get_frontier()
         non_frontier = [c for c in unrevealed if c not in frontier]
         
-        if non_frontier:
-            corners = [(0, 0), (0, self.game.cols-1), 
-                      (self.game.rows-1, 0), (self.game.rows-1, self.game.cols-1)]
-            
+        best_frontier_cell = None
+        min_frontier_prob = 1.0
+        
+        if probs:
+            best_frontier_cell = min(probs, key=probs.get)
+            min_frontier_prob = probs[best_frontier_cell]
+        
+        if min_frontier_prob >= 0.5 and non_frontier:
+            corners = [
+                (0, 0), (0, self.game.cols - 1),
+                (self.game.rows - 1, 0), (self.game.rows - 1, self.game.cols - 1)
+            ]
             for corner in corners:
                 if corner in non_frontier:
                     return ('guess', corner)
-            
-            return ('guess', non_frontier[0])
+            return ('guess', random.choice(non_frontier))
+        
+        if best_frontier_cell and min_frontier_prob < 1.0:
+            return ('guess', best_frontier_cell)
+        
+        if non_frontier:
+            return ('guess', random.choice(non_frontier))
         
         if frontier:
-            return ('guess', frontier[0])
+            return ('guess', random.choice(list(frontier)))
         
         return ('done', None)
     
@@ -567,8 +622,7 @@ class MinesweeperAI:
                 break
             elif action == 'flag':
                 r, c = data
-                self.game.flagged[r][c] = True
-                self.game.buttons[(r, c)].config(text='🚩', bg='yellow')
+                self.game.right_click(r, c)
             elif action == 'chord':
                 r, c = data
                 self.game.chord_reveal(r, c)
@@ -581,11 +635,7 @@ class MinesweeperAI:
                 callback(action, data, solved)
             
             self.game.root.update()
-            
-            if self.game.game_over:
-                break
-                
-            time.sleep(delay_ms / 1000.0)
+            time.sleep(delay_ms / 1000)
         
         return self.game.check_win()
 
@@ -609,10 +659,7 @@ def create_ai_controls(game):
             game.status_label.config(text="No moves left")
         elif action == 'flag':
             r, c = data
-            game.flagged[r][c] = True
-            game.buttons[(r, c)].config(text='🚩', fg='#E74C3C', bg='#A0A4A8', relief=tk.RAISED, bd=3)
-            game.flags_count += 1
-            game.mines_label.config(text=f"💣 {game.mines - game.flags_count}")
+            game.right_click(r, c)
             game.status_label.config(text=f"Flag ({r}, {c})")
         elif action == 'chord':
             r, c = data
@@ -626,6 +673,7 @@ def create_ai_controls(game):
             r, c = data
             game.left_click(r, c)
             game.status_label.config(text=f"Guess ({r}, {c})")
+            
         if not game.game_over and game.check_win():
             game._trigger_win()
             
@@ -642,11 +690,7 @@ def create_ai_controls(game):
         
         def update_status(action, data, solved):
             if action == 'flag':
-                # Re-style cờ cho giống UI mới
                 r, c = data
-                game.buttons[(r, c)].config(text='🚩', fg='#E74C3C', bg='#A0A4A8', relief=tk.RAISED, bd=3)
-                game.flags_count += 1
-                game.mines_label.config(text=f"💣 {game.mines - game.flags_count}")
                 game.status_label.config(text=f"Flag ({r}, {c})")
             elif action == 'chord':
                 game.status_label.config(text=f"Chord {data}")
@@ -658,12 +702,12 @@ def create_ai_controls(game):
         result = ai.auto_solve(delay_ms=50, callback=update_status)
         if result and not game.game_over:
             game._trigger_win()
-
+    
     def on_reset():
         nonlocal ai
         game.reset_game()
         ai = MinesweeperAI(game)
-        game.status_label.config(text="Ready", fg='#50C878')
+        game.status_label.config(text="Ready", fg=game.COLORS['text_status'] if hasattr(game, 'COLORS') else '#50C878')
         game.btn_step.config(state=tk.NORMAL)
         game.btn_auto.config(state=tk.NORMAL)
     
