@@ -1,5 +1,6 @@
 import random
 import sys
+import time
 from pathlib import Path
 
 import pygame
@@ -176,7 +177,11 @@ def choose_menu_option(screen: pygame.Surface, clock: pygame.time.Clock) -> str:
 
 def get_move_for_bot(board: chess.Board, bot_name: str) -> chess.Move | None:
     if bot_name == "alpha-beta":
-        return choose_move_alpha_beta(board, depth=3)
+        start = time.perf_counter()
+        move = choose_move_alpha_beta(board, depth=4, time_limit=12.0)
+        elapsed = time.perf_counter() - start
+        print(f"[AlphaBeta d=4] best_move={move} time={elapsed:.2f}s")
+        return move
 
     # Placeholder: MCTS not implemented yet.
     legal_moves = list(board.legal_moves)
@@ -250,8 +255,10 @@ def main() -> None:
 
         if not board.is_game_over() and board.turn != human_side:
             bot_move = get_move_for_bot(board, bot_name)
-            if bot_move is not None:
+            if bot_move is not None and board.is_legal(bot_move):
                 board.push(bot_move)
+            elif bot_move is not None:
+                print(f"[WARN] Bot returned illegal move: {bot_move}. Skipping move.")
             selected_square = None
             legal_targets.clear()
 
