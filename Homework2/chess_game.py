@@ -7,6 +7,7 @@ import pygame
 import chess
 
 from ai_alphabeta import choose_move_alpha_beta
+from ai_mcts import choose_move_mcts
 
 
 BOARD_SIZE = 8
@@ -184,8 +185,13 @@ def get_move_for_bot(board: chess.Board, bot_name: str) -> chess.Move | None:
         return move
 
     # Placeholder: MCTS not implemented yet.
-    legal_moves = list(board.legal_moves)
-    return random.choice(legal_moves) if legal_moves else None
+    if bot_name == "mcts":
+        start = time.perf_counter()
+        move = choose_move_mcts(board, time_limit=5.0, max_iterations=10_000)
+        elapsed = time.perf_counter() - start
+        print(f"[MCTS] best_move={move} time={elapsed:.2f}s")
+        return move
+    
 
 
 def main() -> None:
