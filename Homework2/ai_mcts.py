@@ -1,13 +1,3 @@
-"""
-ai_mcts.py – MCTS thuần, tối ưu tốc độ
-=========================================
-Vấn đề trước: prior gọi evaluate_board() push/pop → chậm (252 iter/4s)
-Fix: prior chỉ dùng heuristic nhẹ (không push board), evaluate_board()
-chỉ gọi 1 lần duy nhất ở bước simulate.
-
-Logic greedy rollout giữ nguyên để bot nhìn thấy hậu quả capture.
-"""
-
 import math
 import time
 
@@ -21,9 +11,6 @@ EVAL_SCALE    = 2000.0
 ROLLOUT_DEPTH = 4
 
 
-# ─────────────────────────────────────────────
-# SEE đơn giản
-# ─────────────────────────────────────────────
 def _see_ok(board: chess.Board, move: chess.Move) -> bool:
     if not board.is_capture(move):
         return True
@@ -40,16 +27,10 @@ def _see_ok(board: chess.Board, move: chess.Move) -> bool:
     return not board2.is_attacked_by(board2.turn, move.to_square)
 
 
-# ─────────────────────────────────────────────
-# Prior: heuristic nhẹ, KHÔNG push board
-# → nhanh, dùng để sort và PUCT
-# ─────────────────────────────────────────────
-# Bảng trung tâm hóa đơn giản (thay PST ngược)
 _CENTER_BONUS = [0] * 64
 for _sq in range(64):
     _f = chess.square_file(_sq)
     _r = chess.square_rank(_sq)
-    # Bonus theo khoảng cách đến trung tâm (d4,d5,e4,e5)
     _center_f = min(abs(_f - 3), abs(_f - 4))
     _center_r = min(abs(_r - 3), abs(_r - 4))
     _CENTER_BONUS[_sq] = max(0, 3 - _center_f) * 5 + max(0, 3 - _center_r) * 5
@@ -69,30 +50,25 @@ def _prior(board: chess.Board, move: chess.Move) -> float:
         if _see_ok(board, move):
             score += 200.0 + v_val - a_val * 0.1
         else:
-            score -= 300.0   # phạt capture thua lỗ
+            score -= 300.0
         return score
 
     if board.gives_check(move):
         score += 100.0
 
-    # Bonus trung tâm hóa
     score += _CENTER_BONUS[move.to_square]
 
-    # Phạt nếu quân bị tấn công ở ô đích
     piece = board.piece_at(move.from_square)
     if piece:
         board2 = board.copy()
         board2.push(move)
         if board2.is_attacked_by(board2.turn, move.to_square):
             a_val = PIECE_VALUES.get(piece.piece_type, 0)
-            score -= a_val * 0.3   # phạt để quân vào tầm bắn
+            score -= a_val * 0.3   
 
     return score
 
 
-# ─────────────────────────────────────────────
-# Greedy rollout: cả 2 bên chọn nước tốt nhất
-# ─────────────────────────────────────────────
 def _fast_move(board: chess.Board) -> chess.Move:
     """Chọn nước nhanh cho rollout (không gọi evaluate_board)."""
     moves = list(board.legal_moves)
@@ -115,9 +91,6 @@ def _rollout(start: chess.Board) -> chess.Board:
     return b
 
 
-# ─────────────────────────────────────────────
-# Node
-# ─────────────────────────────────────────────
 class MCTSNode:
     __slots__ = ("board_state", "move", "parent", "children",
                  "untried_moves", "prior_scores", "wins", "visits")
@@ -161,9 +134,6 @@ class MCTSNode:
         return max(self.children, key=lambda c: c.visits)
 
 
-# ─────────────────────────────────────────────
-# 4 bước MCTS
-# ─────────────────────────────────────────────
 def _select(node: MCTSNode) -> MCTSNode:
     while not node.is_terminal():
         if not node.is_fully_expanded():
@@ -187,13 +157,11 @@ def _simulate(node: MCTSNode, root_color: chess.Color) -> float:
     if board.is_game_over():
         return _terminal_reward(board, root_color)
 
-    # Greedy rollout để nhìn thấy hậu quả
     after = _rollout(board)
 
     if after.is_game_over():
         return _terminal_reward(after, root_color)
 
-    # evaluate_board() chỉ gọi 1 lần ở đây
     raw        = float(evaluate_board(after))
     clamped    = max(-EVAL_SCALE, min(EVAL_SCALE, raw))
     normalized = clamped / EVAL_SCALE
@@ -218,9 +186,6 @@ def _backpropagate(node: MCTSNode, reward: float) -> None:
         cur         = cur.parent
 
 
-# ─────────────────────────────────────────────
-# Hàm public
-# ─────────────────────────────────────────────
 def choose_move_mcts(
     board: chess.Board,
     time_limit: float   = 5.0,
