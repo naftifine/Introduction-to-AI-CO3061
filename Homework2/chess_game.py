@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pygame
 import chess
+import threading
 
 from ai_alphabeta import choose_move_alpha_beta
 from ai_mcts import choose_move_mcts
@@ -166,7 +167,7 @@ def choose_menu_option(screen: pygame.Surface, clock: pygame.time.Clock) -> str:
             if event.type == pygame.QUIT:
                 pygame.quit()
                 sys.exit()
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if alpha_btn.collidepoint(event.pos):
                     return "alpha-beta"
                 if mcts_btn.collidepoint(event.pos):
@@ -184,7 +185,6 @@ def get_move_for_bot(board: chess.Board, bot_name: str) -> chess.Move | None:
         print(f"[AlphaBeta d=4] best_move={move} time={elapsed:.2f}s")
         return move
 
-    # Placeholder: MCTS not implemented yet.
     if bot_name == "mcts":
         start = time.perf_counter()
         move = choose_move_mcts(board, time_limit=5.0, max_iterations=10_000)
@@ -211,12 +211,25 @@ def main() -> None:
     human_side = chess.WHITE
 
     running = True
+    bot_thread = None
+    bot_result_container = []
+
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:  
+                    bot_name = choose_menu_option(screen, clock)
+                    board.reset()  
+                    bot_thread = None
+                    bot_result_container.clear()
+                    selected_square = None
+                    legal_targets.clear()
+                    continue
 
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if board.is_game_over() or board.turn != human_side:
                     continue
 
@@ -260,15 +273,62 @@ def main() -> None:
                     legal_targets.clear()
 
         if not board.is_game_over() and board.turn != human_side:
-            bot_move = get_move_for_bot(board, bot_name)
-            if bot_move is not None and board.is_legal(bot_move):
-                board.push(bot_move)
-            elif bot_move is not None:
-                print(f"[WARN] Bot returned illegal move: {bot_move}. Skipping move.")
-            selected_square = None
-            legal_targets.clear()
+            if bot_thread is None:
+                bot_result_container.clear()
+                
+                def worker(current_board, name, result_list):
+                    move = get_move_for_bot(current_board, name)
+                    result_list.append(move)
+                
+                bot_thread = threading.Thread(
+                    target=worker, 
+                    args=(board.copy(), bot_name, bot_result_container)
+                )
+                bot_thread.daemon = True 
+                bot_thread.start()
+            
+            elif not bot_thread.is_alive():
+                bot_thread.join()
+                
+                if bot_result_container:
+                    bot_move = bot_result_container[0]
+                    if bot_move is not None and board.is_legal(bot_move):
+                        board.push(bot_move)
+                    elif bot_move is not None:
+                        print(f"[WARN] Bot returned illegal move: {bot_move}. Skipping move.")
+                
+                bot_thread = None
+                selected_square = None
+                legal_targets.clear()
 
         draw_board(screen, board, assets, selected_square, legal_targets, ui_font, bot_name)
+
+        if board.is_game_over():
+            overlay = pygame.Surface((BOARD_SIZE * SQUARE_SIZE, BOARD_SIZE * SQUARE_SIZE), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 150))
+            screen.blit(overlay, (0, 0))
+
+            result = board.result()
+            if result == "1-0":
+                msg = "WHITE WINS!"
+                color = (100, 255, 100)
+            elif result == "0-1":
+                msg = "BLACK WINS!"
+                color = (255, 100, 100)
+            else:
+                msg = "DRAW!"
+                color = (255, 255, 100)
+
+            large_font = pygame.font.SysFont(None, 80, bold=True)
+            text_surf = large_font.render(msg, True, color)
+            text_rect = text_surf.get_rect(center=((BOARD_SIZE * SQUARE_SIZE) // 2, (BOARD_SIZE * SQUARE_SIZE) // 2 - 20))
+            screen.blit(text_surf, text_rect)
+
+            small_font = pygame.font.SysFont(None, 40)
+            restart_surf = small_font.render("Press 'R' to Restart", True, (255, 255, 255))
+            restart_rect = restart_surf.get_rect(center=((BOARD_SIZE * SQUARE_SIZE) // 2, (BOARD_SIZE * SQUARE_SIZE) // 2 + 40))
+            screen.blit(restart_surf, restart_rect)
+
         pygame.display.flip()
         clock.tick(FPS)
 
