@@ -6,6 +6,7 @@ from torchvision import models, transforms
 from PIL import Image
 import numpy as np
 import pandas as pd
+import urllib.request
 
 device = torch.device("cpu")
 class_names = ['Angry', 'Disgust', 'Fear', 'Happy', 'Neutral', 'Sad', 'Surprise']
@@ -20,6 +21,15 @@ transform = transforms.Compose([
 print("Đang tải OpenCV Face Detector...")
 prototxt_path = "deploy.prototxt"
 caffemodel_path = "res10_300x300_ssd_iter_140000.caffemodel"
+
+prototxt_url = "https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt"
+model_url = "https://raw.githubusercontent.com/opencv/opencv_3rdparty/dnn_samples_face_detector_20170830/res10_300x300_ssd_iter_140000.caffemodel"
+
+if not os.path.exists(prototxt_path):
+    urllib.request.urlretrieve(prototxt_url, prototxt_path)
+if not os.path.exists(caffemodel_path):
+    urllib.request.urlretrieve(model_url, caffemodel_path)
+
 net = cv2.dnn.readNetFromCaffe(prototxt_path, caffemodel_path)
 
 print("Đang tải mô hình ResNet-18...")
